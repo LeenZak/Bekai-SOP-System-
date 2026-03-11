@@ -1,10 +1,12 @@
 "use strict";
+
 function formatDate(d) {
   if (!d) return "—";
   var parts = d.split("-");
   if (parts.length !== 3) return d;
   return parts[2] + "/" + parts[1] + "/" + parts[0];
 }
+
 (function () {
   if (window._SOP_SYS_LOADED_) return;
   window._SOP_SYS_LOADED_ = true;
@@ -14,124 +16,139 @@ function formatDate(d) {
   var CATEGORIES = ["All", "Process", "Guideline", "Form", "Procedure", "Checklist", "Records", "Doc. Approval"];
   var STATUSES = ["All", "Planning", "In Progress", "Active", "Completed", "Done", "Pending", "Archived", "Overdue"];
 
-  var KEY = "company_sop_system_db_v5";
+  // ---------- FIREBASE ----------
+  // IMPORTANT:
+  // Replace this config with YOUR Firebase project config
+  var firebaseConfig = {
+    apiKey: "PUT_YOUR_API_KEY_HERE",
+    authDomain: "PUT_YOUR_PROJECT.firebaseapp.com",
+    projectId: "PUT_YOUR_PROJECT_ID_HERE",
+    storageBucket: "PUT_YOUR_PROJECT.appspot.com",
+    messagingSenderId: "PUT_YOUR_SENDER_ID_HERE",
+    appId: "PUT_YOUR_APP_ID_HERE"
+  };
 
-  // ---------- STORAGE ----------
-  function loadDB() {
-    var raw = localStorage.getItem(KEY);
-    if (!raw) return { sops: [] };
+  if (!window.firebase) {
+    alert("Firebase SDK is missing. Add Firebase scripts in HTML before app.js");
+    return;
+  }
+
+  if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+  }
+
+  var firestore = firebase.firestore();
+  var storage = firebase.storage();
+
+  var DB_DOC_PATH = "sop_system/main";
+  var FILE_FOLDER = "sop_files";
+
+  // ---------- APP DB ----------
+  var db = { sops: [] };
+  var dbLoaded = false;
+
+  async function loadDB() {
     try {
-      var obj = JSON.parse(raw);
-      if (!obj || !Array.isArray(obj.sops)) return { sops: [] };
-      return obj;
+      var doc = await firestore.doc(DB_DOC_PATH).get();
+
+      if (!doc.exists) {
+        db = { sops: [] };
+        dbLoaded = true;
+        return db;
+      }
+
+      var data = doc.data() || {};
+      if (!data || !Array.isArray(data.sops)) {
+        db = { sops: [] };
+      } else {
+        db = data;
+      }
+
+      normalizeDB();
+      dbLoaded = true;
+      return db;
     } catch (e) {
-      return { sops: [] };
+      console.error("Cloud DB load failed:", e);
+      db = { sops: [] };
+      dbLoaded = true;
+      return db;
     }
   }
 
-  function saveDB() {
-    localStorage.setItem(KEY, JSON.stringify(db));
+  async function saveDB() {
+    try {
+      normalizeDB();
+      await firestore.doc(DB_DOC_PATH).set(db);
+    } catch (e) {
+      console.error("Cloud DB save failed:", e);
+    }
   }
 
-  var db = loadDB();
+  function subscribeDBChanges() {
+    firestore.doc(DB_DOC_PATH).onSnapshot(function (doc) {
+      if (!doc.exists) return;
+
+      var data = doc.data() || {};
+      if (!data || !Array.isArray(data.sops)) return;
+
+      db = data;
+      normalizeDB();
+
+      if (dbLoaded) {
+        renderAll();
+      }
+    }, function (err) {
+      console.error("Realtime sync failed:", err);
+    });
+  }
 
   // ---------- FILE STORAGE ----------
-  var FILE_DB_NAME = "company_sop_files_db";
-  var FILE_DB_VERSION = 1;
-  var FILE_STORE = "files";
+  async function saveFileBlob(file) {
+    try {
+      var fileId = "file_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+      var safeName = (file.name || "file").replace(/[^\w.\-]/g, "_");
+      var fullPath = FILE_FOLDER + "/" + fileId + "_" + safeName;
 
-  function openFilesDB() {
-    return new Promise(function (resolve, reject) {
-      var req = indexedDB.open(FILE_DB_NAME, FILE_DB_VERSION);
+      var ref = storage.ref().child(fullPath);
+      await ref.put(file);
+      var url = await ref.getDownloadURL();
 
-      req.onupgradeneeded = function (e) {
-        var idb = e.target.result;
-        if (!idb.objectStoreNames.contains(FILE_STORE)) {
-          idb.createObjectStore(FILE_STORE, { keyPath: "id" });
-        }
+      return {
+        id: fileId,
+        name: file.name || "file",
+        type: file.type || "",
+        path: fullPath,
+        url: url
       };
-
-      req.onsuccess = function () {
-        resolve(req.result);
-      };
-
-      req.onerror = function () {
-        reject(req.error || new Error("IndexedDB open failed"));
-      };
-    });
+    } catch (e) {
+      console.error("File upload failed:", e);
+      throw e;
+    }
   }
 
-  function saveFileBlob(file) {
-    return new Promise(function (resolve, reject) {
-      openFilesDB().then(function (idb) {
-        var tx = idb.transaction([FILE_STORE], "readwrite");
-        var store = tx.objectStore(FILE_STORE);
-
-        var id = "file_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-
-        var item = {
-          id: id,
-          name: file.name,
-          type: file.type || "",
-          blob: file
-        };
-
-        var req = store.put(item);
-
-        req.onsuccess = function () {
-          resolve({
-            id: id,
-            name: file.name,
-            type: file.type || ""
-          });
-        };
-
-        req.onerror = function () {
-          reject(req.error || new Error("File save failed"));
-        };
-      }).catch(reject);
-    });
-  }
-
-  function getFileBlob(fileId) {
-    return new Promise(function (resolve, reject) {
-      openFilesDB().then(function (idb) {
-        var tx = idb.transaction([FILE_STORE], "readonly");
-        var store = tx.objectStore(FILE_STORE);
-        var req = store.get(fileId);
-
-        req.onsuccess = function () {
-          resolve(req.result || null);
-        };
-
-        req.onerror = function () {
-          reject(req.error || new Error("File read failed"));
-        };
-      }).catch(reject);
-    });
-  }
-
-  function openStoredFile(fileMeta) {
-    if (!fileMeta || !fileMeta.id) {
+  async function openStoredFile(fileMeta) {
+    if (!fileMeta) {
       alert("No file found.");
       return;
     }
 
-    getFileBlob(fileMeta.id).then(function (record) {
-      if (!record || !record.blob) {
-        alert("Stored file not found.");
+    try {
+      if (fileMeta.url) {
+        window.open(fileMeta.url, "_blank");
         return;
       }
 
-      var url = URL.createObjectURL(record.blob);
-      window.open(url, "_blank");
+      if (fileMeta.path) {
+        var url = await storage.ref().child(fileMeta.path).getDownloadURL();
+        window.open(url, "_blank");
+        return;
+      }
 
-      setTimeout(function () {
-        URL.revokeObjectURL(url);
-      }, 60000);
-    }).catch(function () {
+      alert("Stored file not found.");
+    } catch (e) {
+      console.error("Open stored file failed:", e);
       alert("Could not open stored file.");
-    });
+    }
   }
 
   // ---------- HELPERS ----------
@@ -251,13 +268,14 @@ function formatDate(d) {
     });
   }
 
-  normalizeDB();
-
   function hasProcessFile(sop) {
     ensureProcessObj(sop);
     return !!((sop.process.files && sop.process.files.length) || (sop.process.fileLink && isUrl(sop.process.fileLink)));
   }
 
+  normalizeDB();
+
+  // ---------- ELEMENTS ----------
   // ---------- ELEMENTS ----------
   var navItems = document.querySelectorAll(".navItem");
   var viewTemplates = byId("viewTemplates");
@@ -588,13 +606,13 @@ function formatDate(d) {
         var versionsCount = (sop.versions || []).length;
         var fileCell = "—";
 
-       if (sop.files && sop.files.length) {
-  fileCell = sop.files.map(function (file, index) {
-    return '<a href="#" class="linkBtn fileOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
-  }).join(" ");
-} else if (sop.fileLink && isUrl(sop.fileLink)) {
-  fileCell = '<a href="#" class="linkBtn fileOpen">Open 1</a>';
-}
+        if (sop.files && sop.files.length) {
+          fileCell = sop.files.map(function (file, index) {
+            return '<a href="#" class="linkBtn fileOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
+          }).join(" ");
+        } else if (sop.fileLink && isUrl(sop.fileLink)) {
+          fileCell = '<a href="#" class="linkBtn fileOpen">Open 1</a>';
+        }
 
         var ownerNotes = [];
         if (sop.owner) ownerNotes.push(sop.owner);
@@ -672,12 +690,12 @@ function formatDate(d) {
         var fileCell = "—";
 
         if (sop.process.files && sop.process.files.length) {
-  fileCell = sop.process.files.map(function (file, index) {
-    return '<a href="#" class="linkBtn procOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
-  }).join(" ");
-} else if (sop.process.fileLink && isUrl(sop.process.fileLink)) {
-  fileCell = '<a href="#" class="linkBtn procOpen" data-file-index="0">Open 1</a>';
-}
+          fileCell = sop.process.files.map(function (file, index) {
+            return '<a href="#" class="linkBtn procOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
+          }).join(" ");
+        } else if (sop.process.fileLink && isUrl(sop.process.fileLink)) {
+          fileCell = '<a href="#" class="linkBtn procOpen" data-file-index="0">Open 1</a>';
+        }
 
         var tr = document.createElement("tr");
         tr.innerHTML =
@@ -817,6 +835,7 @@ function formatDate(d) {
       };
     }
   }
+
   // ---------- SOP CRUD ----------
   function openNew() {
     if (!can("canCreateSop")) {
@@ -879,7 +898,10 @@ function formatDate(d) {
     }
 
     var title = (sTitle.value || "").trim();
-    if (!title) return;
+    if (!title) {
+      alert("Please enter SOP title.");
+      return;
+    }
 
     var payload = {
       title: title,
@@ -893,79 +915,84 @@ function formatDate(d) {
       updatedAt: new Date().toISOString()
     };
 
-    var filesArr = [];
-    if (sFilePick && sFilePick.files && sFilePick.files.length) {
-      for (var i = 0; i < sFilePick.files.length; i++) {
-        var savedMeta = await saveFileBlob(sFilePick.files[i]);
-        filesArr.push(savedMeta);
-      }
-    }
-
-    if (!editingId) {
-      var id = uid();
-
-      var firstVer = {
-        id: uid(),
-        version: "V1.0",
-        date: payload.activationDate || today(),
-        status: payload.status,
-        summary: "Initial creation",
-        fileLink: payload.fileLink || "",
-        files: filesArr.slice(),
-        file: filesArr.length ? filesArr[0] : null
-      };
-
-      db.sops.push({
-        id: id,
-        title: payload.title,
-        department: payload.department,
-        category: payload.category,
-        status: payload.status,
-        activationDate: payload.activationDate,
-        owner: payload.owner,
-        notes: payload.notes,
-        fileLink: payload.fileLink,
-        files: filesArr,
-        file: filesArr.length ? filesArr[0] : null,
-        latestVersion: "V1.0",
-        updatedAt: payload.updatedAt,
-        versions: [firstVer],
-        process: {
-          notes: "",
-          fileLink: "",
-          file: null,
-          files: [],
-          updatedAt: ""
+    try {
+      var filesArr = [];
+      if (sFilePick && sFilePick.files && sFilePick.files.length) {
+        for (var i = 0; i < sFilePick.files.length; i++) {
+          var savedMeta = await saveFileBlob(sFilePick.files[i]);
+          filesArr.push(savedMeta);
         }
-      });
-    } else {
-      var sop = db.sops.find(function (x) { return x.id === editingId; });
-      if (!sop) return;
-
-      sop.title = payload.title;
-      sop.department = payload.department;
-      sop.category = payload.category;
-      sop.status = payload.status;
-      sop.activationDate = payload.activationDate;
-      sop.owner = payload.owner;
-      sop.notes = payload.notes;
-      sop.fileLink = payload.fileLink;
-      sop.updatedAt = payload.updatedAt;
-
-      if (filesArr.length) {
-        sop.files = filesArr;
-        sop.file = filesArr[0];
       }
 
-      ensureProcessObj(sop);
-    }
+      if (!editingId) {
+        var id = uid();
 
-    saveDB();
-    dlgSop.close();
-    renderAll();
+        var firstVer = {
+          id: uid(),
+          version: "V1.0",
+          date: payload.activationDate || today(),
+          status: payload.status,
+          summary: "Initial creation",
+          fileLink: payload.fileLink || "",
+          files: filesArr.slice(),
+          file: filesArr.length ? filesArr[0] : null
+        };
+
+        db.sops.push({
+          id: id,
+          title: payload.title,
+          department: payload.department,
+          category: payload.category,
+          status: payload.status,
+          activationDate: payload.activationDate,
+          owner: payload.owner,
+          notes: payload.notes,
+          fileLink: payload.fileLink,
+          files: filesArr,
+          file: filesArr.length ? filesArr[0] : null,
+          latestVersion: "V1.0",
+          updatedAt: payload.updatedAt,
+          versions: [firstVer],
+          process: {
+            notes: "",
+            fileLink: "",
+            file: null,
+            files: [],
+            updatedAt: ""
+          }
+        });
+      } else {
+        var sop = db.sops.find(function (x) { return x.id === editingId; });
+        if (!sop) return;
+
+        sop.title = payload.title;
+        sop.department = payload.department;
+        sop.category = payload.category;
+        sop.status = payload.status;
+        sop.activationDate = payload.activationDate;
+        sop.owner = payload.owner;
+        sop.notes = payload.notes;
+        sop.fileLink = payload.fileLink;
+        sop.updatedAt = payload.updatedAt;
+
+        if (filesArr.length) {
+          sop.files = filesArr;
+          sop.file = filesArr[0];
+        }
+
+        ensureProcessObj(sop);
+      }
+
+      await saveDB();
+      dlgSop.close();
+      renderAll();
+    } catch (e) {
+      console.error(e);
+      alert("Could not save SOP.");
+    }
   }
 
-  function deleteSop() {
+  async function deleteSop() {
     if (!can("canDeleteSop")) {
       alert("You do not have permission to delete SOPs.");
       return;
@@ -974,14 +1001,19 @@ function formatDate(d) {
     if (!editingId) return;
     if (!confirm("Delete this SOP?")) return;
 
-    db.sops = db.sops.filter(function (x) { return x.id !== editingId; });
-    dlgSop.close();
+    try {
+      db.sops = db.sops.filter(function (x) { return x.id !== editingId; });
+      dlgSop.close();
 
-    if (detailsId === editingId) detailsId = null;
-    if (selectedProcessId === editingId) selectedProcessId = null;
+      if (detailsId === editingId) detailsId = null;
+      if (selectedProcessId === editingId) selectedProcessId = null;
 
-    saveDB();
-    renderAll();
+      await saveDB();
+      renderAll();
+    } catch (e) {
+      console.error(e);
+      alert("Could not delete SOP.");
+    }
   }
 
   // ---------- DETAILS / VERSIONS ----------
@@ -996,7 +1028,7 @@ function formatDate(d) {
     dDept.textContent = sop.department || "—";
     dCat.textContent = sop.category || "—";
     dStatus.textContent = sop.status || "—";
-    dAct.textContent = sop.activationDate || "—";
+    dAct.textContent = formatDate(sop.activationDate);
     dLatest.textContent = sop.latestVersion || "—";
     dCount.textContent = String((sop.versions || []).length);
     dOwner.textContent = sop.owner || "—";
@@ -1039,13 +1071,14 @@ function formatDate(d) {
       ensureFilesArray(v);
 
       var fileCell = "—";
-if (v.files && v.files.length) {
-  fileCell = v.files.map(function (file, index) {
-    return '<a href="#" class="linkBtn verFileOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
-  }).join(" ");
-} else if (v.fileLink && isUrl(v.fileLink)) {
-  fileCell = '<a href="#" class="linkBtn verFileOpen">Open</a>';
-}
+      if (v.files && v.files.length) {
+        fileCell = v.files.map(function (file, index) {
+          return '<a href="#" class="linkBtn verFileOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
+        }).join(" ");
+      } else if (v.fileLink && isUrl(v.fileLink)) {
+        fileCell = '<a href="#" class="linkBtn verFileOpen">Open 1</a>';
+      }
+
       var tr = document.createElement("tr");
       tr.innerHTML =
         '<td><b>' + escapeHtml(v.version) + '</b></td>' +
@@ -1115,51 +1148,59 @@ if (v.files && v.files.length) {
     var summary = (vSum.value || "").trim();
     var fileLink = (vFile.value || "").trim();
 
-    if (!version || !summary) return;
-
-    var filesArr = [];
-    if (vFilePick && vFilePick.files && vFilePick.files.length) {
-      for (var i = 0; i < vFilePick.files.length; i++) {
-        var savedMeta = await saveFileBlob(vFilePick.files[i]);
-        filesArr.push(savedMeta);
-      }
+    if (!version || !summary) {
+      alert("Please fill version and summary.");
+      return;
     }
 
-    sop.versions = sop.versions || [];
-    sop.versions.push({
-      id: uid(),
-      version: version,
-      date: date,
-      status: status,
-      summary: summary,
-      fileLink: fileLink,
-      files: filesArr,
-      file: filesArr.length ? filesArr[0] : null
-    });
-
-    var lastVersion = sop.versions[sop.versions.length - 1];
-    if (lastVersion) {
-      if (lastVersion.files && lastVersion.files.length) {
-        sop.files = lastVersion.files;
-        sop.file = lastVersion.files[0];
-      } else if (lastVersion.fileLink) {
-        sop.fileLink = lastVersion.fileLink;
+    try {
+      var filesArr = [];
+      if (vFilePick && vFilePick.files && vFilePick.files.length) {
+        for (var i = 0; i < vFilePick.files.length; i++) {
+          var savedMeta = await saveFileBlob(vFilePick.files[i]);
+          filesArr.push(savedMeta);
+        }
       }
 
-      sop.latestVersion = lastVersion.version || sop.latestVersion;
+      sop.versions = sop.versions || [];
+      sop.versions.push({
+        id: uid(),
+        version: version,
+        date: date,
+        status: status,
+        summary: summary,
+        fileLink: fileLink,
+        files: filesArr,
+        file: filesArr.length ? filesArr[0] : null
+      });
+
+      var lastVersion = sop.versions[sop.versions.length - 1];
+      if (lastVersion) {
+        if (lastVersion.files && lastVersion.files.length) {
+          sop.files = lastVersion.files;
+          sop.file = lastVersion.files[0];
+        } else if (lastVersion.fileLink) {
+          sop.fileLink = lastVersion.fileLink;
+        }
+
+        sop.latestVersion = lastVersion.version || sop.latestVersion;
+      }
+
+      sop.status = status;
+      sop.updatedAt = new Date().toISOString();
+
+      if (!sop.files) sop.files = [];
+      if (!sop.file && filesArr.length) sop.file = filesArr[0];
+      if (!sop.fileLink && fileLink) sop.fileLink = fileLink;
+
+      await saveDB();
+      dlgVersion.close();
+      renderAll();
+      openDetails(sop.id);
+    } catch (e) {
+      console.error(e);
+      alert("Could not save version.");
     }
-
-    sop.status = status;
-    sop.updatedAt = new Date().toISOString();
-
-    if (!sop.files) sop.files = [];
-    if (!sop.file && filesArr.length) sop.file = filesArr[0];
-    if (!sop.fileLink && fileLink) sop.fileLink = fileLink;
-
-    saveDB();
-    dlgVersion.close();
-    renderAll();
-    openDetails(sop.id);
   }
 
   // ---------- PROCESS DIALOG ----------
@@ -1194,7 +1235,7 @@ if (v.files && v.files.length) {
 
             '<label class="span2">Process File (PDF / DOCX) from Desktop' +
               '<input id="procFilePick" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />' +
-              '<small class="small">Stored inside the system (browser storage). Keep files not too large.</small>' +
+              '<small class="small">Stored inside cloud storage and shared with all users.</small>' +
             '</label>' +
 
             '<label class="span2">Or Process File Link (SharePoint / Drive URL)' +
@@ -1303,38 +1344,43 @@ if (v.files && v.files.length) {
 
     ensureProcessObj(sop);
 
-    var notes = (procNotes.value || "").trim();
-    var link = (procFileLink.value || "").trim();
+    try {
+      var notes = (procNotes.value || "").trim();
+      var link = (procFileLink.value || "").trim();
 
-    var filesArr = [];
-    if (procFilePick && procFilePick.files && procFilePick.files.length) {
-      for (var i = 0; i < procFilePick.files.length; i++) {
-        var savedMeta = await saveFileBlob(procFilePick.files[i]);
-        filesArr.push(savedMeta);
+      var filesArr = [];
+      if (procFilePick && procFilePick.files && procFilePick.files.length) {
+        for (var i = 0; i < procFilePick.files.length; i++) {
+          var savedMeta = await saveFileBlob(procFilePick.files[i]);
+          filesArr.push(savedMeta);
+        }
       }
+
+      sop.process.notes = notes;
+      sop.process.fileLink = link;
+
+      if (filesArr.length) {
+        sop.process.files = filesArr;
+        sop.process.file = filesArr[0];
+      } else if (!link) {
+        sop.process.files = [];
+        sop.process.file = null;
+      }
+
+      sop.process.updatedAt = new Date().toISOString();
+      sop.updatedAt = new Date().toISOString();
+
+      await saveDB();
+      dlgProc.close();
+
+      selectedProcessId = sop.id;
+      renderAll();
+      setView("process");
+      renderProcessPanel(sop.id);
+    } catch (e) {
+      console.error(e);
+      alert("Could not save process.");
     }
-
-    sop.process.notes = notes;
-    sop.process.fileLink = link;
-
-    if (filesArr.length) {
-      sop.process.files = filesArr;
-      sop.process.file = filesArr[0];
-    } else if (!link) {
-      sop.process.files = [];
-      sop.process.file = null;
-    }
-
-    sop.process.updatedAt = new Date().toISOString();
-    sop.updatedAt = new Date().toISOString();
-
-    saveDB();
-    dlgProc.close();
-
-    selectedProcessId = sop.id;
-    renderAll();
-    setView("process");
-    renderProcessPanel(sop.id);
   }
 
   // ---------- EXCEL ----------
@@ -1392,7 +1438,7 @@ if (v.files && v.files.length) {
     XLSX.writeFile(wb, "SOP_System_" + today() + ".xlsx");
   }
 
-  function importExcel(file) {
+  async function importExcel(file) {
     if (!can("canImportExcel")) {
       alert("You do not have permission to import Excel.");
       return;
@@ -1405,7 +1451,7 @@ if (v.files && v.files.length) {
 
     var reader = new FileReader();
 
-    reader.onload = function (e) {
+    reader.onload = async function (e) {
       try {
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, { type: "array" });
@@ -1499,7 +1545,7 @@ if (v.files && v.files.length) {
         selectedProcessId = null;
         detailsId = null;
 
-        saveDB();
+        await saveDB();
         renderAll();
         alert("Import successful.");
       } catch (err) {
@@ -1554,7 +1600,7 @@ if (v.files && v.files.length) {
           div.className = "listItem";
           div.innerHTML =
             "<b>" + escapeHtml(s.title) + "</b>" +
-            "<span>" + escapeHtml(s.department) + " • " + escapeHtml(s.activationDate || "—") + "</span>";
+            "<span>" + escapeHtml(s.department) + " • " + formatDate(s.activationDate || "") + "</span>";
           div.onclick = function () {
             openDetails(s.id);
           };
@@ -1577,7 +1623,7 @@ if (v.files && v.files.length) {
           div.className = "listItem";
           div.innerHTML =
             "<b>" + escapeHtml(s.title) + "</b>" +
-            "<span>Updated: " + escapeHtml((s.updatedAt || "").slice(0, 10) || "—") + " • " + escapeHtml(s.status || "") + "</span>";
+            "<span>Updated: " + formatDate((s.updatedAt || "").slice(0, 10)) + " • " + escapeHtml(s.status || "") + "</span>";
           div.onclick = function () {
             openDetails(s.id);
           };
@@ -1733,7 +1779,6 @@ if (v.files && v.files.length) {
 
   // ---------- RENDER ----------
   function renderAll() {
-    saveDB();
     applyPermissions();
     renderDeptChips();
     renderKPI();
@@ -1786,19 +1831,19 @@ if (v.files && v.files.length) {
     if (fStatus) fStatus.value = "All";
 
     var loginOverlay = byId("loginOverlay");
-    var appShell = document.querySelector(".appShell");
+    var appShellLocal = document.querySelector(".appShell");
     var loginUser = byId("loginUser");
     var loginPass = byId("loginPass");
-    var loginMsg = byId("loginMsg");
+    var loginMsgLocal = byId("loginMsg");
 
-    if (appShell) appShell.style.display = "none";
+    if (appShellLocal) appShellLocal.style.display = "none";
     if (loginOverlay) loginOverlay.style.display = "flex";
 
     if (loginUser) loginUser.value = "";
     if (loginPass) loginPass.value = "";
-    if (loginMsg) {
-      loginMsg.textContent = "";
-      loginMsg.style.color = "";
+    if (loginMsgLocal) {
+      loginMsgLocal.textContent = "";
+      loginMsgLocal.style.color = "";
     }
 
     applyPermissions();
@@ -1943,9 +1988,15 @@ if (v.files && v.files.length) {
   }
 
   // ---------- START ----------
-  renderAll();
-  applyPermissions();
-  setView("templates");
+  async function startApp() {
+    await loadDB();
+    subscribeDBChanges();
+    renderAll();
+    applyPermissions();
+    setView("templates");
+  }
+
+  startApp();
 })();
 
 // ---------- SERVICE WORKER ----------
@@ -1973,12 +2024,7 @@ function showAppForRole(role) {
   if (loginOverlay) loginOverlay.style.display = "none";
   if (appShell) appShell.style.display = "flex";
   sessionStorage.setItem("role", role);
-
-  if (typeof window !== "undefined") {
-    setTimeout(function () {
-      window.location.reload();
-    }, 50);
-  }
+  window.location.reload();
 }
 
 function doLogin() {
@@ -1993,7 +2039,7 @@ function doLogin() {
 
     setTimeout(function () {
       showAppForRole(user);
-    }, 500);
+    }, 300);
   } else {
     if (loginMsg) {
       loginMsg.style.color = "red";

@@ -16,139 +16,127 @@ function formatDate(d) {
   var CATEGORIES = ["All", "Process", "Guideline", "Form", "Procedure", "Checklist", "Records", "Doc. Approval"];
   var STATUSES = ["All", "Planning", "In Progress", "Active", "Completed", "Done", "Pending", "Archived", "Overdue"];
 
-  // ---------- FIREBASE ----------
-  // IMPORTANT:
-  // Replace this config with YOUR Firebase project config
+  // =========================================================
+  // FIREBASE SETUP
+  // PUT YOUR REAL FIREBASE CONFIG HERE
+  // =========================================================
   var firebaseConfig = {
-    apiKey: "PUT_YOUR_API_KEY_HERE",
-    authDomain: "PUT_YOUR_PROJECT.firebaseapp.com",
-    projectId: "PUT_YOUR_PROJECT_ID_HERE",
-    storageBucket: "PUT_YOUR_PROJECT.appspot.com",
-    messagingSenderId: "PUT_YOUR_SENDER_ID_HERE",
-    appId: "PUT_YOUR_APP_ID_HERE"
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT.firebasestorage.app",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
   };
-
-  if (!window.firebase) {
-    alert("Firebase SDK is missing. Add Firebase scripts in HTML before app.js");
-    return;
-  }
 
   if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
   }
 
-  var firestore = firebase.firestore();
-  var storage = firebase.storage();
+  var fdb = firebase.firestore();
+  var fstorage = firebase.storage();
+  var sopsCollection = fdb.collection("sops");
 
-  var DB_DOC_PATH = "sop_system/main";
-  var FILE_FOLDER = "sop_files";
-
-  // ---------- APP DB ----------
+  // ---------- DB ----------
   var db = { sops: [] };
-  var dbLoaded = false;
 
   async function loadDB() {
     try {
-      var doc = await firestore.doc(DB_DOC_PATH).get();
+      var snap = await sopsCollection.get();
+      var rows = [];
 
-      if (!doc.exists) {
-        db = { sops: [] };
-        dbLoaded = true;
-        return db;
-      }
+      snap.forEach(function (doc) {
+        var data = doc.data() || {};
+        if (!data.id) data.id = doc.id;
+        rows.push(data);
+      });
 
-      var data = doc.data() || {};
-      if (!data || !Array.isArray(data.sops)) {
-        db = { sops: [] };
-      } else {
-        db = data;
-      }
-
+      db = { sops: rows };
       normalizeDB();
-      dbLoaded = true;
       return db;
     } catch (e) {
-      console.error("Cloud DB load failed:", e);
+      console.error("Firestore load failed:", e);
       db = { sops: [] };
-      dbLoaded = true;
       return db;
     }
   }
 
-  async function saveDB() {
-    try {
-      normalizeDB();
-      await firestore.doc(DB_DOC_PATH).set(db);
-    } catch (e) {
-      console.error("Cloud DB save failed:", e);
-    }
+  async function saveSopToCloud(sop) {
+    if (!sop || !sop.id) return;
+    await sopsCollection.doc(sop.id).set(sop);
   }
 
-  function subscribeDBChanges() {
-    firestore.doc(DB_DOC_PATH).onSnapshot(function (doc) {
-      if (!doc.exists) return;
-
-      var data = doc.data() || {};
-      if (!data || !Array.isArray(data.sops)) return;
-
-      db = data;
-      normalizeDB();
-
-      if (dbLoaded) {
-        renderAll();
-      }
-    }, function (err) {
-      console.error("Realtime sync failed:", err);
-    });
+  async function deleteSopFromCloud(sopId) {
+    if (!sopId) return;
+    await sopsCollection.doc(sopId).delete();
   }
 
-  // ---------- FILE STORAGE ----------
+  function saveDB() {
+    // no localStorage anymore
+    // keep function so the rest of your app still works without breaking
+  }
+
+  // ---------- FILE STORAGE : FIREBASE STORAGE ----------
   async function saveFileBlob(file) {
     try {
-      var fileId = "file_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-      var safeName = (file.name || "file").replace(/[^\w.\-]/g, "_");
-      var fullPath = FILE_FOLDER + "/" + fileId + "_" + safeName;
+      var cleanName = (file.name || "file").replace(/[^\w.\-]+/g, "_");
+      var path = "sop_files/" + Date.now() + "_" + Math.random().toString(36).slice(2) + "_" + cleanName;
 
-      var ref = storage.ref().child(fullPath);
-      await ref.put(file);
-      var url = await ref.getDownloadURL();
+      var storageRef = fstorage.ref().child(path);
+      var uploadTask = await storageRef.put(file);
+      var downloadURL = await uploadTask.ref.getDownloadURL();
 
       return {
-        id: fileId,
-        name: file.name || "file",
+        id: path,
+        name: file.name,
         type: file.type || "",
-        path: fullPath,
-        url: url
+        url: downloadURL
       };
-    } catch (e) {
-      console.error("File upload failed:", e);
-      throw e;
+    } catch (err) {
+      console.error("Firebase file save failed:", err);
+      throw err;
     }
   }
 
-  async function openStoredFile(fileMeta) {
+  async function getFileBlob(fileId) {
+    try {
+      if (!fileId) return null;
+      var url = await fstorage.ref().child(fileId).getDownloadURL();
+      return {
+        id: fileId,
+        url: url
+      };
+    } catch (err) {
+      console.error("Firebase file read failed:", err);
+      return null;
+    }
+  }
+
+  function openStoredFile(fileMeta) {
     if (!fileMeta) {
       alert("No file found.");
       return;
     }
 
-    try {
-      if (fileMeta.url) {
-        window.open(fileMeta.url, "_blank");
-        return;
-      }
-
-      if (fileMeta.path) {
-        var url = await storage.ref().child(fileMeta.path).getDownloadURL();
-        window.open(url, "_blank");
-        return;
-      }
-
-      alert("Stored file not found.");
-    } catch (e) {
-      console.error("Open stored file failed:", e);
-      alert("Could not open stored file.");
+    if (fileMeta.url) {
+      window.open(fileMeta.url, "_blank");
+      return;
     }
+
+    if (!fileMeta.id) {
+      alert("No file found.");
+      return;
+    }
+
+    getFileBlob(fileMeta.id).then(function (record) {
+      if (!record || !record.url) {
+        alert("Stored file not found.");
+        return;
+      }
+      window.open(record.url, "_blank");
+    }).catch(function () {
+      alert("Could not open stored file.");
+    });
   }
 
   // ---------- HELPERS ----------
@@ -273,9 +261,6 @@ function formatDate(d) {
     return !!((sop.process.files && sop.process.files.length) || (sop.process.fileLink && isUrl(sop.process.fileLink)));
   }
 
-  normalizeDB();
-
-  // ---------- ELEMENTS ----------
   // ---------- ELEMENTS ----------
   var navItems = document.querySelectorAll(".navItem");
   var viewTemplates = byId("viewTemplates");
@@ -898,10 +883,7 @@ function formatDate(d) {
     }
 
     var title = (sTitle.value || "").trim();
-    if (!title) {
-      alert("Please enter SOP title.");
-      return;
-    }
+    if (!title) return;
 
     var payload = {
       title: title,
@@ -915,81 +897,78 @@ function formatDate(d) {
       updatedAt: new Date().toISOString()
     };
 
-    try {
-      var filesArr = [];
-      if (sFilePick && sFilePick.files && sFilePick.files.length) {
-        for (var i = 0; i < sFilePick.files.length; i++) {
-          var savedMeta = await saveFileBlob(sFilePick.files[i]);
-          filesArr.push(savedMeta);
-        }
+    var filesArr = [];
+    if (sFilePick && sFilePick.files && sFilePick.files.length) {
+      for (var i = 0; i < sFilePick.files.length; i++) {
+        var savedMeta = await saveFileBlob(sFilePick.files[i]);
+        filesArr.push(savedMeta);
       }
-
-      if (!editingId) {
-        var id = uid();
-
-        var firstVer = {
-          id: uid(),
-          version: "V1.0",
-          date: payload.activationDate || today(),
-          status: payload.status,
-          summary: "Initial creation",
-          fileLink: payload.fileLink || "",
-          files: filesArr.slice(),
-          file: filesArr.length ? filesArr[0] : null
-        };
-
-        db.sops.push({
-          id: id,
-          title: payload.title,
-          department: payload.department,
-          category: payload.category,
-          status: payload.status,
-          activationDate: payload.activationDate,
-          owner: payload.owner,
-          notes: payload.notes,
-          fileLink: payload.fileLink,
-          files: filesArr,
-          file: filesArr.length ? filesArr[0] : null,
-          latestVersion: "V1.0",
-          updatedAt: payload.updatedAt,
-          versions: [firstVer],
-          process: {
-            notes: "",
-            fileLink: "",
-            file: null,
-            files: [],
-            updatedAt: ""
-          }
-        });
-      } else {
-        var sop = db.sops.find(function (x) { return x.id === editingId; });
-        if (!sop) return;
-
-        sop.title = payload.title;
-        sop.department = payload.department;
-        sop.category = payload.category;
-        sop.status = payload.status;
-        sop.activationDate = payload.activationDate;
-        sop.owner = payload.owner;
-        sop.notes = payload.notes;
-        sop.fileLink = payload.fileLink;
-        sop.updatedAt = payload.updatedAt;
-
-        if (filesArr.length) {
-          sop.files = filesArr;
-          sop.file = filesArr[0];
-        }
-
-        ensureProcessObj(sop);
-      }
-
-      await saveDB();
-      dlgSop.close();
-      renderAll();
-    } catch (e) {
-      console.error(e);
-      alert("Could not save SOP.");
     }
+    var id = uid();
+
+      var firstVer = {
+        id: uid(),
+        version: "V1.0",
+        date: payload.activationDate || today(),
+        status: payload.status,
+        summary: "Initial creation",
+        fileLink: payload.fileLink || "",
+        files: filesArr.slice(),
+        file: filesArr.length ? filesArr[0] : null
+      };
+
+      var newSop = {
+        id: id,
+        title: payload.title,
+        department: payload.department,
+        category: payload.category,
+        status: payload.status,
+        activationDate: payload.activationDate,
+        owner: payload.owner,
+        notes: payload.notes,
+        fileLink: payload.fileLink,
+        files: filesArr,
+        file: filesArr.length ? filesArr[0] : null,
+        latestVersion: "V1.0",
+        updatedAt: payload.updatedAt,
+        versions: [firstVer],
+        process: {
+          notes: "",
+          fileLink: "",
+          file: null,
+          files: [],
+          updatedAt: ""
+        }
+      };
+
+      db.sops.push(newSop);
+      await saveSopToCloud(newSop);
+
+    } else {
+      var sop = db.sops.find(function (x) { return x.id === editingId; });
+      if (!sop) return;
+
+      sop.title = payload.title;
+      sop.department = payload.department;
+      sop.category = payload.category;
+      sop.status = payload.status;
+      sop.activationDate = payload.activationDate;
+      sop.owner = payload.owner;
+      sop.notes = payload.notes;
+      sop.fileLink = payload.fileLink;
+      sop.updatedAt = payload.updatedAt;
+
+      if (filesArr.length) {
+        sop.files = filesArr;
+        sop.file = filesArr[0];
+      }
+
+      ensureProcessObj(sop);
+      await saveSopToCloud(sop);
+    }
+
+    dlgSop.close();
+    renderAll();
   }
 
   async function deleteSop() {
@@ -1001,19 +980,16 @@ function formatDate(d) {
     if (!editingId) return;
     if (!confirm("Delete this SOP?")) return;
 
-    try {
-      db.sops = db.sops.filter(function (x) { return x.id !== editingId; });
-      dlgSop.close();
+    db.sops = db.sops.filter(function (x) { return x.id !== editingId; });
 
-      if (detailsId === editingId) detailsId = null;
-      if (selectedProcessId === editingId) selectedProcessId = null;
+    await deleteSopFromCloud(editingId);
 
-      await saveDB();
-      renderAll();
-    } catch (e) {
-      console.error(e);
-      alert("Could not delete SOP.");
-    }
+    dlgSop.close();
+
+    if (detailsId === editingId) detailsId = null;
+    if (selectedProcessId === editingId) selectedProcessId = null;
+
+    renderAll();
   }
 
   // ---------- DETAILS / VERSIONS ----------
@@ -1028,7 +1004,7 @@ function formatDate(d) {
     dDept.textContent = sop.department || "—";
     dCat.textContent = sop.category || "—";
     dStatus.textContent = sop.status || "—";
-    dAct.textContent = formatDate(sop.activationDate);
+    dAct.textContent = sop.activationDate || "—";
     dLatest.textContent = sop.latestVersion || "—";
     dCount.textContent = String((sop.versions || []).length);
     dOwner.textContent = sop.owner || "—";
@@ -1076,7 +1052,7 @@ function formatDate(d) {
           return '<a href="#" class="linkBtn verFileOpen" data-file-index="' + index + '">Open ' + (index + 1) + '</a>';
         }).join(" ");
       } else if (v.fileLink && isUrl(v.fileLink)) {
-        fileCell = '<a href="#" class="linkBtn verFileOpen">Open 1</a>';
+        fileCell = '<a href="#" class="linkBtn verFileOpen">Open</a>';
       }
 
       var tr = document.createElement("tr");
@@ -1148,59 +1124,52 @@ function formatDate(d) {
     var summary = (vSum.value || "").trim();
     var fileLink = (vFile.value || "").trim();
 
-    if (!version || !summary) {
-      alert("Please fill version and summary.");
-      return;
+    if (!version || !summary) return;
+
+    var filesArr = [];
+    if (vFilePick && vFilePick.files && vFilePick.files.length) {
+      for (var i = 0; i < vFilePick.files.length; i++) {
+        var savedMeta = await saveFileBlob(vFilePick.files[i]);
+        filesArr.push(savedMeta);
+      }
     }
 
-    try {
-      var filesArr = [];
-      if (vFilePick && vFilePick.files && vFilePick.files.length) {
-        for (var i = 0; i < vFilePick.files.length; i++) {
-          var savedMeta = await saveFileBlob(vFilePick.files[i]);
-          filesArr.push(savedMeta);
-        }
+    sop.versions = sop.versions || [];
+    sop.versions.push({
+      id: uid(),
+      version: version,
+      date: date,
+      status: status,
+      summary: summary,
+      fileLink: fileLink,
+      files: filesArr,
+      file: filesArr.length ? filesArr[0] : null
+    });
+
+    var lastVersion = sop.versions[sop.versions.length - 1];
+    if (lastVersion) {
+      if (lastVersion.files && lastVersion.files.length) {
+        sop.files = lastVersion.files;
+        sop.file = lastVersion.files[0];
+      } else if (lastVersion.fileLink) {
+        sop.fileLink = lastVersion.fileLink;
       }
 
-      sop.versions = sop.versions || [];
-      sop.versions.push({
-        id: uid(),
-        version: version,
-        date: date,
-        status: status,
-        summary: summary,
-        fileLink: fileLink,
-        files: filesArr,
-        file: filesArr.length ? filesArr[0] : null
-      });
-
-      var lastVersion = sop.versions[sop.versions.length - 1];
-      if (lastVersion) {
-        if (lastVersion.files && lastVersion.files.length) {
-          sop.files = lastVersion.files;
-          sop.file = lastVersion.files[0];
-        } else if (lastVersion.fileLink) {
-          sop.fileLink = lastVersion.fileLink;
-        }
-
-        sop.latestVersion = lastVersion.version || sop.latestVersion;
-      }
-
-      sop.status = status;
-      sop.updatedAt = new Date().toISOString();
-
-      if (!sop.files) sop.files = [];
-      if (!sop.file && filesArr.length) sop.file = filesArr[0];
-      if (!sop.fileLink && fileLink) sop.fileLink = fileLink;
-
-      await saveDB();
-      dlgVersion.close();
-      renderAll();
-      openDetails(sop.id);
-    } catch (e) {
-      console.error(e);
-      alert("Could not save version.");
+      sop.latestVersion = lastVersion.version || sop.latestVersion;
     }
+
+    sop.status = status;
+    sop.updatedAt = new Date().toISOString();
+
+    if (!sop.files) sop.files = [];
+    if (!sop.file && filesArr.length) sop.file = filesArr[0];
+    if (!sop.fileLink && fileLink) sop.fileLink = fileLink;
+
+    await saveSopToCloud(sop);
+
+    dlgVersion.close();
+    renderAll();
+    openDetails(sop.id);
   }
 
   // ---------- PROCESS DIALOG ----------
@@ -1235,7 +1204,7 @@ function formatDate(d) {
 
             '<label class="span2">Process File (PDF / DOCX) from Desktop' +
               '<input id="procFilePick" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />' +
-              '<small class="small">Stored inside cloud storage and shared with all users.</small>' +
+              '<small class="small">Stored in Firebase Storage.</small>' +
             '</label>' +
 
             '<label class="span2">Or Process File Link (SharePoint / Drive URL)' +
@@ -1344,43 +1313,39 @@ function formatDate(d) {
 
     ensureProcessObj(sop);
 
-    try {
-      var notes = (procNotes.value || "").trim();
-      var link = (procFileLink.value || "").trim();
+    var notes = (procNotes.value || "").trim();
+    var link = (procFileLink.value || "").trim();
 
-      var filesArr = [];
-      if (procFilePick && procFilePick.files && procFilePick.files.length) {
-        for (var i = 0; i < procFilePick.files.length; i++) {
-          var savedMeta = await saveFileBlob(procFilePick.files[i]);
-          filesArr.push(savedMeta);
-        }
+    var filesArr = [];
+    if (procFilePick && procFilePick.files && procFilePick.files.length) {
+      for (var i = 0; i < procFilePick.files.length; i++) {
+        var savedMeta = await saveFileBlob(procFilePick.files[i]);
+        filesArr.push(savedMeta);
       }
-
-      sop.process.notes = notes;
-      sop.process.fileLink = link;
-
-      if (filesArr.length) {
-        sop.process.files = filesArr;
-        sop.process.file = filesArr[0];
-      } else if (!link) {
-        sop.process.files = [];
-        sop.process.file = null;
-      }
-
-      sop.process.updatedAt = new Date().toISOString();
-      sop.updatedAt = new Date().toISOString();
-
-      await saveDB();
-      dlgProc.close();
-
-      selectedProcessId = sop.id;
-      renderAll();
-      setView("process");
-      renderProcessPanel(sop.id);
-    } catch (e) {
-      console.error(e);
-      alert("Could not save process.");
     }
+
+    sop.process.notes = notes;
+    sop.process.fileLink = link;
+
+    if (filesArr.length) {
+      sop.process.files = filesArr;
+      sop.process.file = filesArr[0];
+    } else if (!link) {
+      sop.process.files = [];
+      sop.process.file = null;
+    }
+
+    sop.process.updatedAt = new Date().toISOString();
+    sop.updatedAt = new Date().toISOString();
+
+    await saveSopToCloud(sop);
+
+    dlgProc.close();
+
+    selectedProcessId = sop.id;
+    renderAll();
+    setView("process");
+    renderProcessPanel(sop.id);
   }
 
   // ---------- EXCEL ----------
@@ -1438,7 +1403,7 @@ function formatDate(d) {
     XLSX.writeFile(wb, "SOP_System_" + today() + ".xlsx");
   }
 
-  async function importExcel(file) {
+  function importExcel(file) {
     if (!can("canImportExcel")) {
       alert("You do not have permission to import Excel.");
       return;
@@ -1545,7 +1510,19 @@ function formatDate(d) {
         selectedProcessId = null;
         detailsId = null;
 
-        await saveDB();
+        var oldSnap = await sopsCollection.get();
+        var deletePromises = [];
+        oldSnap.forEach(function (doc) {
+          deletePromises.push(sopsCollection.doc(doc.id).delete());
+        });
+        await Promise.all(deletePromises);
+
+        var savePromises = [];
+        newSops.forEach(function (s) {
+          savePromises.push(saveSopToCloud(s));
+        });
+        await Promise.all(savePromises);
+
         renderAll();
         alert("Import successful.");
       } catch (err) {
@@ -1556,6 +1533,7 @@ function formatDate(d) {
 
     reader.readAsArrayBuffer(file);
   }
+
   // ---------- DASHBOARD ----------
   function getStatusCounts() {
     var map = {};
@@ -1600,7 +1578,7 @@ function formatDate(d) {
           div.className = "listItem";
           div.innerHTML =
             "<b>" + escapeHtml(s.title) + "</b>" +
-            "<span>" + escapeHtml(s.department) + " • " + formatDate(s.activationDate || "") + "</span>";
+            "<span>" + escapeHtml(s.department) + " • " + escapeHtml(s.activationDate || "—") + "</span>";
           div.onclick = function () {
             openDetails(s.id);
           };
@@ -1623,7 +1601,7 @@ function formatDate(d) {
           div.className = "listItem";
           div.innerHTML =
             "<b>" + escapeHtml(s.title) + "</b>" +
-            "<span>Updated: " + formatDate((s.updatedAt || "").slice(0, 10)) + " • " + escapeHtml(s.status || "") + "</span>";
+            "<span>Updated: " + escapeHtml((s.updatedAt || "").slice(0, 10) || "—") + " • " + escapeHtml(s.status || "") + "</span>";
           div.onclick = function () {
             openDetails(s.id);
           };
@@ -1831,19 +1809,19 @@ function formatDate(d) {
     if (fStatus) fStatus.value = "All";
 
     var loginOverlay = byId("loginOverlay");
-    var appShellLocal = document.querySelector(".appShell");
+    var appShell = document.querySelector(".appShell");
     var loginUser = byId("loginUser");
     var loginPass = byId("loginPass");
-    var loginMsgLocal = byId("loginMsg");
+    var loginMsg = byId("loginMsg");
 
-    if (appShellLocal) appShellLocal.style.display = "none";
+    if (appShell) appShell.style.display = "none";
     if (loginOverlay) loginOverlay.style.display = "flex";
 
     if (loginUser) loginUser.value = "";
     if (loginPass) loginPass.value = "";
-    if (loginMsgLocal) {
-      loginMsgLocal.textContent = "";
-      loginMsgLocal.style.color = "";
+    if (loginMsg) {
+      loginMsg.textContent = "";
+      loginMsg.style.color = "";
     }
 
     applyPermissions();
@@ -1988,15 +1966,13 @@ function formatDate(d) {
   }
 
   // ---------- START ----------
-  async function startApp() {
+  (async function startApp() {
     await loadDB();
-    subscribeDBChanges();
     renderAll();
     applyPermissions();
     setView("templates");
-  }
+  })();
 
-  startApp();
 })();
 
 // ---------- SERVICE WORKER ----------
@@ -2024,7 +2000,12 @@ function showAppForRole(role) {
   if (loginOverlay) loginOverlay.style.display = "none";
   if (appShell) appShell.style.display = "flex";
   sessionStorage.setItem("role", role);
-  window.location.reload();
+
+  if (typeof window !== "undefined") {
+    setTimeout(function () {
+      window.location.reload();
+    }, 50);
+  }
 }
 
 function doLogin() {
@@ -2039,7 +2020,7 @@ function doLogin() {
 
     setTimeout(function () {
       showAppForRole(user);
-    }, 300);
+    }, 500);
   } else {
     if (loginMsg) {
       loginMsg.style.color = "red";

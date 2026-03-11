@@ -1,0 +1,8 @@
+{
+"name": "Bekai SOP System",
+"short_name": "SOP",
+"start_url": "/",
+"display": "standalone",
+"background_color": "#ffffff",
+"theme_color": "#0f172a"
+}

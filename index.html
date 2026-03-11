@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bekai SOP System</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- SheetJS -->
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+
+<body>
+  <!-- Login -->
+  <div id="loginOverlay" class="loginOverlay">
+    <div class="loginBox">
+      <img src="logo1.png.png" class="loginLogo" alt="Logo">
+      <h2>Bekai SOP System</h2>
+      <input type="text" id="loginUser" placeholder="Username">
+      <input type="password" id="loginPass" placeholder="Password">
+      <button id="loginBtn" type="button">Login</button>
+      <p id="loginMsg" class="loginMsg"></p>
+    </div>
+  </div>
+
+  <div class="appShell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brandLogoImg" src="./logo1.png.png" alt="Logo">
+        <div class="brandTxt">
+          <div class="brandName">Bekai SOP System</div>
+          <div class="brandSub">Templates • Processes • Analytics</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="navItem active" data-view="templates" type="button">
+          <span class="navDot"></span>
+          Company Templates
+        </button>
+
+        <button class="navItem" data-view="process" type="button">
+          <span class="navDot"></span>
+          Process & Guidelines
+        </button>
+
+        <button class="navItem" data-view="dash" type="button" id="navDash">
+          <span class="navDot"></span>
+          Dashboard
+        </button>
+      </nav>
+
+      <div class="sideSection" id="kpiSection">
+        <div class="sideTitle">KPI</div>
+        <div id="kpiStack" class="kpiStack"></div>
+      </div>
+
+      <!-- Logout -->
+      <div class="sideSection">
+        <button id="btnLogout" class="btn secondary" type="button" style="width:100%;">Logout</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Top header -->
+      <header class="topbar">
+        <div class="topLeft">
+          <h1 id="pageTitle">Company Templates</h1>
+          <p id="pageDesc">Standardize processes, improve efficiency, track versions.</p>
+        </div>
+
+        <div class="topActions">
+          <button id="btnExportXlsx" class="btn secondary" type="button">Export Excel</button>
+          <button id="btnImportXlsx" class="btn secondary" type="button">Import Excel</button>
+          <input id="importXlsxFile" type="file" accept=".xlsx,.xls" hidden />
+          <button id="btnNew" class="btn primary" type="button">+ New SOP</button>
+        </div>
+      </header>
+
+      <!-- Department chips -->
+      <div class="chipsRow">
+        <div id="deptChips" class="chips"></div>
+      </div>
+
+      <!-- Filters -->
+      <section class="filters card">
+        <div class="filterRow">
+          <input id="q" type="search" placeholder="Search SOP name..." />
+          <select id="fDept"></select>
+          <select id="fCat"></select>
+          <select id="fStatus"></select>
+          <button id="btnClear" class="btn secondary" type="button">Clear</button>
+        </div>
+        <div class="hint">
+          Tip: Click a row to open details. Use “Add Version” to keep history.
+        </div>
+      </section>
+
+      <!-- Templates View -->
+      <section id="viewTemplates" class="view active">
+        <section class="card">
+          <div class="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Template Name</th>
+                  <th>Department</th>
+                  <th>Category</th>
+                  <th>Latest Ver.</th>
+                  <th>Versions</th>
+                  <th>Date of Activation</th>
+                  <th>Status</th>
+                  <th>File</th>
+                  <th>Owner</th>
+                </tr>
+              </thead>
+              <tbody id="tbody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- Process View -->
+      <section id="viewProcess" class="view">
+        <section class="card">
+          <div class="split">
+            <div class="splitLeft">
+              <div class="splitTitle">
+                <div>
+                  <h2 class="h2">Process & Guidelines</h2>
+                  <div class="sub" id="processSubtitle">Select an SOP to view details.</div>
+                </div>
+
+                <div>
+                  <button id="btnNewProcess" class="btn primary" type="button">+ Add Process</button>
+                </div>
+              </div>
+
+              <div class="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Template Name</th>
+                      <th>Department</th>
+                      <th>Category</th>
+                      <th>Latest</th>
+                      <th>Versions</th>
+                      <th>Process/Guideline</th>
+                      <th>Status</th>
+                      <th>Date of Activation</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbodyProcess"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="splitRight">
+              <div class="panel">
+                <div class="panelTop">
+                  <div>
+                    <div class="panelTitle" id="pTitle">No SOP Selected</div>
+                    <div class="panelMeta" id="pMeta">Click an SOP from the list.</div>
+                  </div>
+                  <div class="panelBtns">
+                    <button id="btnOpenDetails" class="btn secondary" type="button" disabled>Open Details</button>
+                  </div>
+                </div>
+
+                <div class="miniGrid">
+                  <div class="miniCard">
+                    <div class="miniLabel">Department</div>
+                    <div class="miniValue" id="pDept">—</div>
+                  </div>
+
+                  <div class="miniCard">
+                    <div class="miniLabel">Category</div>
+                    <div class="miniValue" id="pCat">—</div>
+                  </div>
+
+                  <div class="miniCard">
+                    <div class="miniLabel">Status</div>
+                    <div class="miniValue" id="pStatus">—</div>
+                  </div>
+
+                  <div class="miniCard">
+                    <div class="miniLabel">Activation</div>
+                    <div class="miniValue" id="pAct">—</div>
+                  </div>
+
+                  <div class="miniCard">
+                    <div class="miniLabel">Owner</div>
+                    <div class="miniValue" id="pOwner">—</div>
+                  </div>
+
+                  <div class="miniCard">
+                    <div class="miniLabel">Latest Version</div>
+                    <div class="miniValue" id="pLatest">—</div>
+                  </div>
+                </div>
+
+                <div class="panelBlock">
+                  <div class="panelBlockTop">
+                    <div class="panelBlockTitle">Description / Notes</div>
+                    <div class="tag" id="pFileTag">No File</div>
+                  </div>
+
+                  <div class="panelText" id="pNotes">—</div>
+                  <div id="pFileWrap" class="fileRow"></div>
+                </div>
+
+                <div class="panelBlock">
+                  <div class="panelBlockTop">
+                    <div class="panelBlockTitle">Versions Timeline</div>
+                    <button id="btnAddVersionQuick" class="btn primary" type="button" disabled>+ Add Version</button>
+                  </div>
+                  <div id="pTimeline" class="timeline"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Dashboard View -->
+      <section id="viewDash" class="view">
+        <section class="card">
+          <div class="dashTop">
+            <div class="dashPills">
+              <span class="pill" id="pillTotal">0 SOP(s)</span>
+              <span class="pill" id="pillDept">0 Dep(s)</span>
+              <span class="pill ghost">Health Widgets</span>
+            </div>
+          </div>
+
+          <div class="dashGrid">
+            <div class="gadget">
+              <div class="gTitle">Status Distribution</div>
+              <canvas id="chartStatus" height="180"></canvas>
+            </div>
+
+            <div class="gadget">
+              <div class="gTitle">Department Performance</div>
+              <canvas id="chartDept" height="180"></canvas>
+            </div>
+
+            <div class="gadget">
+              <div class="gTitle">Overdue / Risk List</div>
+              <div id="overdueList" class="list"></div>
+            </div>
+
+            <div class="gadget">
+              <div class="gTitle">Recent Updates</div>
+              <div id="recentList" class="list"></div>
+            </div>
+
+            <div class="gadget wide">
+              <div class="gTitle">Insights</div>
+              <div id="insights" class="insights"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- SOP Modal -->
+  <dialog id="dlgSop" class="dlg">
+    <form method="dialog" class="dlgBody" id="sopForm">
+      <div class="dlgHeader">
+        <h2 id="dlgTitle">New SOP</h2>
+        <button class="iconBtn" value="cancel" aria-label="Close" type="button" id="xSop">✕</button>
+      </div>
+
+      <div class="grid">
+        <label>
+          Template Name
+          <input id="sTitle" required />
+        </label>
+
+        <label>
+          Department
+          <select id="sDept" required></select>
+        </label>
+
+        <label>
+          Category
+          <select id="sCat" required></select>
+        </label>
+
+        <label>
+          Status
+          <select id="sStatus" required></select>
+        </label>
+
+        <label>
+          Date
+          <input id="sAct" type="date" />
+        </label>
+
+        <label>
+          Owner
+          <input id="sOwner" />
+        </label>
+
+        <label class="span2">
+          Notes
+          <input id="sNotes" placeholder="Short description..." />
+        </label>
+
+        <label class="span2">
+          File (PDF / DOCX) from Desktop
+          <input id="sFilePick" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />
+          <small class="small">Stored inside the system (browser storage). Keep files not too large.</small>
+        </label>
+
+        <label class="span2">
+          Or File Link (SharePoint / Drive URL)
+          <input id="sFile" placeholder="https://..." />
+        </label>
+      </div>
+
+      <div class="dlgFooter">
+        <button id="btnDeleteSop" class="btn danger" type="button">Delete SOP</button>
+        <div class="rightBtns">
+          <button class="btn secondary" type="button" id="btnCancel">Cancel</button>
+          <button class="btn primary" id="btnSave" type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Details / Versions Modal -->
+  <dialog id="dlgDetails" class="dlg">
+    <form method="dialog" class="dlgBody">
+      <div class="dlgHeader">
+        <h2 id="dName">SOP Details</h2>
+        <div class="dlgHeaderBtns">
+          <button id="btnEditSop" class="btn secondary" type="button">Edit</button>
+          <button class="iconBtn" value="cancel" aria-label="Close" type="button" id="xDetails">✕</button>
+        </div>
+      </div>
+
+      <div class="details">
+        <div class="detailsRow">
+          <div><b>Department:</b> <span id="dDept"></span></div>
+          <div><b>Category:</b> <span id="dCat"></span></div>
+          <div><b>Status:</b> <span id="dStatus"></span></div>
+          <div><b>Date:</b> <span id="dAct"></span></div>
+        </div>
+
+        <div class="detailsRow">
+          <div><b>Latest Version:</b> <span id="dLatest"></span></div>
+          <div><b>Versions Count:</b> <span id="dCount"></span></div>
+          <div><b>Owner:</b> <span id="dOwner"></span></div>
+          <div><b>File:</b> <span id="dFile"></span></div>
+        </div>
+
+        <div class="detailsRow">
+          <div class="span2"><b>Notes:</b> <span id="dNotes"></span></div>
+        </div>
+      </div>
+
+      <div class="subHeader">
+        <h3>Versions</h3>
+        <button id="btnAddVersion" class="btn primary" type="button">+ Add Version</button>
+      </div>
+
+      <div class="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Change Summary</th>
+              <th>File</th>
+            </tr>
+          </thead>
+          <tbody id="vbody"></tbody>
+        </table>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add Version Modal -->
+  <dialog id="dlgVersion" class="dlg">
+    <form method="dialog" class="dlgBody" id="verForm">
+      <div class="dlgHeader">
+        <h2>Add Version</h2>
+        <button class="iconBtn" value="cancel" aria-label="Close" type="button" id="xVer">✕</button>
+      </div>
+
+      <div class="grid">
+        <label>
+          Version (auto suggestion)
+          <input id="vVer" required />
+        </label>
+
+        <label>
+          Date
+          <input id="vDate" type="date" />
+        </label>
+
+        <label>
+          Status at this version
+          <select id="vStatus" required></select>
+        </label>
+
+        <label class="span2">
+          Change Summary
+          <input id="vSum" placeholder="What changed?" required />
+        </label>
+
+        <label class="span2">
+          Version File (optional)
+          <input id="vFilePick" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />
+        </label>
+
+        <label class="span2">
+          Or File Link (optional)
+          <input id="vFile" placeholder="https://..." />
+        </label>
+      </div>
+
+      <div class="dlgFooter">
+        <button class="btn secondary" type="button" id="btnVerCancel">Cancel</button>
+        <button class="btn primary" type="submit">Save Version</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>
